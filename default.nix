@@ -4,11 +4,11 @@
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "rusty_ddns";
-  version = "1.0.0";
+  version = "0.1.0";
 
   src = ./.;
 
-  cargoHash = "sha256-/5df2d04xpsNrb8khvMZNLtwzi3PHT6XjMae+h6IzYc=";
+  cargoHash = "sha256-pJ1J8fdFTgaS4A5aomCs8d6K6QeN3G1SsEg4+JTbiOw=";
 
   meta = {
     description = "A minimal DDNS client, written in Rust with 0 dependencies.";
