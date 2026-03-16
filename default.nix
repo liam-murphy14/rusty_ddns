@@ -8,7 +8,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   src = ./.;
 
-  cargoHash = "sha256-pJ1J8fdFTgaS4A5aomCs8d6K6QeN3G1SsEg4+JTbiOw=";
+  cargoHash = "sha256-Gd1RfhcDx1A3/8smQwgFDShvLq7dC+QvEarhTNJYYMY=";
 
   meta = {
     description = "A minimal DDNS client, written in Rust with 0 dependencies.";

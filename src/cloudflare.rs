@@ -72,40 +72,20 @@ fn get_existing_record(client: &Client, record_name: &str, api_token: &str) -> R
     info!("Received messages from GetZones CloudFlare API, messages: [{:#?}]", existing_record_res.messages);
 
     match existing_record_res.result {
-        // TODO
         Some(zones) => {
             Ok(zones.into_iter().filter(|zone| zone.name == record_name).next())
         },
         None => Ok(None),
     }
-    
-    // existing_record_res.mes
-    // match existing_record_res {
-    //     Ok(res) => {
-    //         match res.json()::<GetZonesResponse> {
-    //             Ok(data) => {}
-    //             Err(err) => {
-    //         match err.status() {
-    //             Some(status_code) => error!("Failed to get existing record for domain: [{}], status code: [{}], error: [{}]", request.record_name, status_code, err),
-    //             None => error!("Failed to get existing record for domain: [{}] without status code, error: [{}]", request.record_name, err)
-    //         }
-    //             }
-    //         }
-    //     }
-    //     Err(err) => {
-    //         match err.status() {
-    //             Some(status_code) => error!("Failed to get existing record for domain: [{}], status code: [{}], error: [{}]", request.record_name, status_code, err),
-    //             None => error!("Failed to get existing record for domain: [{}] without status code, error: [{}]", request.record_name, err)
-    //         }
-    //     }
-    // }
 }
-pub fn handle_update(request: &CloudflareUpdateRequest) -> Result<(), UpdateError> {
+pub fn handle_update(request: CloudflareUpdateRequest) -> Result<(), UpdateError> {
     let client = Client::new();
     let zone = match get_existing_record(&client, &request.record_name, &request.api_token) {
         Ok(Some(zone)) => zone,
-        Ok(None) => return Err(UpdateError::Retryable(String::from("Could not find existing record")))
-        Err(error) => return Err(UpdateError::Retryable(String::from("Could not find existing record")))
+        Ok(None) => return Err(UpdateError::Retryable(String::from("Could not find existing record"))),
+        Err(error) => return Err(UpdateError::Retryable(String::from(format!("Failed to fetch existing record, error [{:#?}]", error))))
     };
+    // TODO: remove
+    info!("Zone: [{:#?}]", zone);
     Ok(())
 }
