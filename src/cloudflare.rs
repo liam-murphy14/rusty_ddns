@@ -1,4 +1,4 @@
-use std::{net::IpAddr};
+use std::net::IpAddr;
 
 use log::{debug, error, info, warn};
 use reqwest::{Error, blocking::Client};
@@ -53,28 +53,50 @@ struct ResponseInfo {
 
 #[derive(Deserialize, Debug)]
 struct Source {
-    pub pointer: Option<String>
+    pub pointer: Option<String>,
 }
 
-fn get_existing_record(client: &Client, record_name: &str, api_token: &str) -> Result<Option<Zone>, Error> {
-    let existing_record_res: GetZonesResponse = client.get("https://api.cloudflare.com/client/v4/zones")
+fn get_existing_record(
+    client: &Client,
+    record_name: &str,
+    api_token: &str,
+) -> Result<Option<Zone>, Error> {
+    let existing_record_res: GetZonesResponse = client
+        .get("https://api.cloudflare.com/client/v4/zones")
         .header("Authorization", format!("Bearer {}", api_token))
         .query(&[("name", &record_name)])
-        .send()?.json()?;
-    debug!("Received response from GetZones CloudFlare API, res: [{:#?}]", existing_record_res);
+        .send()?
+        .json()?;
+    debug!(
+        "Received response from GetZones CloudFlare API, res: [{:#?}]",
+        existing_record_res
+    );
 
     if !existing_record_res.success {
-        error!("Received unsuccessful response from GetZones CloudFlare API, errors: [{:#?}]", existing_record_res.errors);
+        error!(
+            "Received unsuccessful response from GetZones CloudFlare API, errors: [{:#?}]",
+            existing_record_res.errors
+        );
         return Ok(None);
     } else if existing_record_res.errors.len() > 0 {
-        warn!("Received errors from GetZones CloudFlare API, errors: [{:#?}]", existing_record_res.errors)
+        warn!(
+            "Received errors from GetZones CloudFlare API, errors: [{:#?}]",
+            existing_record_res.errors
+        )
     }
-    info!("Received messages from GetZones CloudFlare API, messages: [{:#?}]", existing_record_res.messages);
+
+    if existing_record_res.messages.len() > 0 {
+        info!(
+            "Received messages from GetZones CloudFlare API, messages: [{:#?}]",
+            existing_record_res.messages
+        );
+    }
 
     match existing_record_res.result {
-        Some(zones) => {
-            Ok(zones.into_iter().filter(|zone| zone.name == record_name).next())
-        },
+        Some(zones) => Ok(zones
+            .into_iter()
+            .filter(|zone| zone.name == record_name)
+            .next()),
         None => Ok(None),
     }
 }
@@ -82,8 +104,17 @@ pub fn handle_update(request: CloudflareUpdateRequest) -> Result<(), UpdateError
     let client = Client::new();
     let zone = match get_existing_record(&client, &request.record_name, &request.api_token) {
         Ok(Some(zone)) => zone,
-        Ok(None) => return Err(UpdateError::Retryable(String::from("Could not find existing record"))),
-        Err(error) => return Err(UpdateError::Retryable(String::from(format!("Failed to fetch existing record, error [{:#?}]", error))))
+        Ok(None) => {
+            return Err(UpdateError::Retryable(String::from(
+                "Could not find existing record",
+            )));
+        }
+        Err(error) => {
+            return Err(UpdateError::Retryable(String::from(format!(
+                "Failed to fetch existing record, error [{:#?}]",
+                error
+            ))));
+        }
     };
     // TODO: remove
     info!("Zone: [{:#?}]", zone);

@@ -1,7 +1,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use clap::{Parser, Subcommand};
-use clap_verbosity_flag::{Verbosity, InfoLevel};
+use clap_verbosity_flag::{Verbosity, WarnLevel};
 use rusty_ddns::{UpdateRequest, cloudflare::CloudflareUpdateRequest, update_record};
 
 /// DDNS client program
@@ -10,7 +10,7 @@ use rusty_ddns::{UpdateRequest, cloudflare::CloudflareUpdateRequest, update_reco
 struct Cli {
     /// Control output level
     #[command(flatten)]
-    verbose: Verbosity<InfoLevel>,
+    verbosity: Verbosity<WarnLevel>,
 
     /// Subcommand to run
     #[command(subcommand)]
@@ -19,20 +19,30 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-Cloudflare {
-#[arg(short, long)]
-    api_token: String,
-#[arg(short, long)]
-    record_name: String,
-}
+    Cloudflare {
+        #[arg(short, long)]
+        api_token: String,
+        #[arg(short, long)]
+        record_name: String,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
+    env_logger::builder()
+        .filter_level(cli.verbosity.log_level_filter())
+        .init();
 
     match cli.command {
-        Commands::Cloudflare { api_token, record_name } => {
-            let _ = update_record(UpdateRequest::Cloudflare(CloudflareUpdateRequest { api_token, record_name, ip: IpAddr::V4(Ipv4Addr::new(127,0,0,1))}));
+        Commands::Cloudflare {
+            api_token,
+            record_name,
+        } => {
+            let _ = update_record(UpdateRequest::Cloudflare(CloudflareUpdateRequest {
+                api_token,
+                record_name,
+                ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+            }));
         }
     }
 }
