@@ -5,6 +5,7 @@ pub mod cloudflare;
 pub enum UpdateRequest {
     Cloudflare(CloudflareUpdateRequest),
 }
+#[derive(Debug)]
 pub enum UpdateError {
     Retryable(String),
     Fatal(String),

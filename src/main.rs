@@ -2,6 +2,7 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{Verbosity, WarnLevel};
+use log::{error, info};
 use rusty_ddns::{UpdateRequest, cloudflare::CloudflareUpdateRequest, update_record};
 
 /// DDNS client program
@@ -38,11 +39,14 @@ fn main() {
             api_token,
             record_name,
         } => {
-            let _ = update_record(UpdateRequest::Cloudflare(CloudflareUpdateRequest {
+            match update_record(UpdateRequest::Cloudflare(CloudflareUpdateRequest {
                 api_token,
                 record_name,
                 ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-            }));
+            })) {
+                Ok(()) => info!("ok record"),
+                Err(error) => error!("error: [{:#?}]", error),
+            };
         }
     }
 }

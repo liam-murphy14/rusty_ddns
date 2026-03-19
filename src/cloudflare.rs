@@ -1,6 +1,6 @@
-use std::net::IpAddr;
+use std::{collections::HashMap, net::IpAddr};
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use reqwest::{Error, blocking::Client};
 use serde::Deserialize;
 
@@ -10,6 +10,22 @@ pub struct CloudflareUpdateRequest {
     pub api_token: String,
     pub record_name: String,
     pub ip: IpAddr,
+}
+
+#[derive(Deserialize, Debug)]
+struct GetRecordsResponse {
+    pub errors: Vec<ResponseInfo>,
+    pub messages: Vec<ResponseInfo>,
+    pub success: bool,
+    pub result: Option<Vec<RecordResponse>>,
+    pub result_info: Option<ResultInfo>,
+}
+
+#[derive(Deserialize, Debug)]
+struct RecordResponse {
+    pub id: String,
+    pub created_on: String,
+    pub modifited_on: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -100,6 +116,55 @@ fn get_existing_record(
         None => Ok(None),
     }
 }
+fn find_record(
+    client: &Client,
+    record_name: &str,
+    zone_id: &str,
+    api_token: &str,
+) -> Result<Option<RecordResponse>, Error> {
+    trace!("in find record");
+    let mut content_query_param = HashMap::new();
+    content_query_param.insert("exact", record_name);
+    let existing_record_res: GetRecordsResponse = client
+        .get(format!(
+            "https://api.cloudflare.com/client/v4/{}/dns_records",
+            zone_id
+        ))
+        .header("Authorization", format!("Bearer {}", api_token))
+        .query(&[("content", content_query_param)])
+        .send()?
+        .json()?;
+    debug!(
+        "Received response from GetDnsRecords CloudFlare API, input zone ID: [{:#?}], res: [{:#?}]",
+        zone_id, existing_record_res
+    );
+
+    if !existing_record_res.success {
+        error!(
+            "Received unsuccessful response from GetDnsRecords CloudFlare API, input zone ID: [{:#?}], errors: [{:#?}]",
+            zone_id, existing_record_res.errors
+        );
+        return Ok(None);
+    } else if existing_record_res.errors.len() > 0 {
+        warn!(
+            "Received errors from GetDnsRecords CloudFlare API, errors: [{:#?}]",
+            existing_record_res.errors
+        )
+    }
+
+    if existing_record_res.messages.len() > 0 {
+        info!(
+            "Received messages from GetZones CloudFlare API, messages: [{:#?}]",
+            existing_record_res.messages
+        );
+    }
+
+    match existing_record_res.result {
+        Some(records) => Ok(records.into_iter().next()),
+        None => Ok(None),
+    }
+}
+// fn update_record(client: &Client, api_token: &str, zone_id: &str, record_id: &str) {}
 pub fn handle_update(request: CloudflareUpdateRequest) -> Result<(), UpdateError> {
     let client = Client::new();
     let zone = match get_existing_record(&client, &request.record_name, &request.api_token) {
@@ -116,7 +181,23 @@ pub fn handle_update(request: CloudflareUpdateRequest) -> Result<(), UpdateError
             ))));
         }
     };
+    let record = match find_record(&client, &request.record_name, &zone.id, &request.api_token) {
+        Ok(Some(record)) => record,
+        // TODO: update this to create a new record
+        Ok(None) => {
+            return Err(UpdateError::Retryable(String::from(
+                "Could not find existing record",
+            )));
+        }
+        Err(error) => {
+            return Err(UpdateError::Retryable(String::from(format!(
+                "Failed to fetch existing record, error [{:#?}]",
+                error
+            ))));
+        }
+    };
     // TODO: remove
     info!("Zone: [{:#?}]", zone);
+    info!("Record: [{:#?}]", record);
     Ok(())
 }
