@@ -2,3 +2,4 @@
 /target
 /result
 /cloudflare_token_DO_NOT_COMMIT.txt
+/rust-toolchain

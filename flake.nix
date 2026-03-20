@@ -30,6 +30,9 @@
       );
       devShells = forEachSupportedSystem (
         { pkgs }:
+        let
+          rustSrcPathStable = "./rust-toolchain";
+        in
         {
           default = pkgs.mkShell {
             packages = with pkgs; [
@@ -39,10 +42,13 @@
               clippy
               rust-analyzer
             ];
-          };
-          env = {
-            # Required by rust-analyzer
-            RUST_SRC_PATH = "${pkgs.rustToolchain}/lib/rustlib/src/rust/library";
+            shellHook = ''
+              ln -sfn ${pkgs.rustPlatform.rustLibSrc} ${rustSrcPathStable}
+            '';
+            env = {
+              # Required by RustRover
+              RUST_SRC_PATH = "${rustSrcPathStable}";
+            };
           };
         }
       );
