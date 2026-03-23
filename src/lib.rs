@@ -16,3 +16,9 @@ pub fn update_record(request: UpdateRequest) -> Result<(), UpdateError> {
         UpdateRequest::Cloudflare(request) => handle_update(request),
     }
 }
+
+// record name already validated
+pub fn get_sld(valid_record_name: &str) -> String {
+    let names = valid_record_name.split('.').collect::<Vec<_>>();
+    names[names.len() - 2..].join(".")
+}

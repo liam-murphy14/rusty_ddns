@@ -43,6 +43,7 @@ fn main() {
                 api_token,
                 record_name,
                 ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                allow_create: true,
             })) {
                 Ok(()) => info!("ok record"),
                 Err(error) => error!("error: [{:#?}]", error),

@@ -31,7 +31,15 @@
       devShells = forEachSupportedSystem (
         { pkgs }:
         let
-          rustSrcPathStable = "./rust-toolchain";
+          rustToolchain = pkgs.symlinkJoin {
+            name = "rust-toolchain";
+            paths = with pkgs; [
+              rustc
+              cargo
+              rustPlatform.rustLibSrc
+            ];
+          };
+          rustToolchainPathStable = "./rust-toolchain";
         in
         {
           default = pkgs.mkShell {
@@ -43,11 +51,12 @@
               rust-analyzer
             ];
             shellHook = ''
-              ln -sfn ${pkgs.rustPlatform.rustLibSrc} ${rustSrcPathStable}
+              ln -sfn ${rustToolchain} ${rustToolchainPathStable}
             '';
             env = {
               # Required by RustRover
-              RUST_SRC_PATH = "${rustSrcPathStable}";
+              RUST_SRC_PATH = "${rustToolchainPathStable}";
+              RUST_BACKTRACE = 1;
             };
           };
         }
