@@ -1,15 +1,15 @@
-use std::{collections::HashMap, net::IpAddr};
-
 use log::{debug, error, info, trace, warn};
 use reqwest::{Error, blocking::Client};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
-use crate::{UpdateError, get_sld};
+use crate::{RecordUpdate, UpdateError, UpdateResponse, get_sld};
 
 pub struct CloudflareUpdateRequest {
     pub api_token: String,
     pub record_name: String,
-    pub ip: IpAddr,
+    pub ipv4addr: IpAddr,
+    pub ipv6addr: Option<IpAddr>,
     pub allow_create: bool,
 }
 
@@ -66,6 +66,23 @@ struct ResponseInfo {
     pub message: String,
     pub documentation_url: Option<String>,
     pub source: Option<Source>,
+}
+
+#[derive(Serialize, Debug)]
+struct UpdateRequest {
+    pub name: String,
+    pub content: String,
+    pub comment: String,
+    pub r#type: String,
+}
+
+#[derive(Serialize, Debug)]
+struct CreateRequest {
+    pub name: String,
+    pub content: String,
+    pub comment: String,
+    pub r#type: String,
+    pub proxied: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -169,8 +186,45 @@ fn find_record(
         None => Ok(None),
     }
 }
-// fn update_record(client: &Client, api_token: &str, zone_id: &str, record_id: &str) {}
-pub fn handle_update(request: CloudflareUpdateRequest) -> Result<(), UpdateError> {
+fn update_record(
+    client: &Client,
+    api_token: &str,
+    zone_id: &str,
+    record_id: &str,
+    ip: &IpAddr,
+    record_name: &str,
+) -> Result<RecordUpdate, Error> {
+    trace!(
+        "In update_record, arguments - zone_id: [{:#?}], record_id: [{:#?}]",
+        zone_id, record_id
+    );
+    let _update_record_response: GetRecordsResponse = client
+        .patch(format!(
+            "https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}",
+            zone_id, record_id
+        ))
+        .header("Authorization", format!("Bearer {}", api_token))
+        .json(&get_body(ip, record_name))
+        .send()?
+        .json()?;
+    Ok(RecordUpdate {
+        ip: ip.clone(),
+        record_name: record_name.to_string(),
+    })
+}
+fn get_body(ip: &IpAddr, record_name: &str) -> UpdateRequest {
+    let record_type = match ip {
+        IpAddr::V4(_) => "A",
+        IpAddr::V6(_) => "AAAA",
+    };
+    UpdateRequest {
+        name: record_name.to_string(),
+        content: ip.to_string(),
+        comment: String::from("Updated by rusty_ddns client for Cloudflare"),
+        r#type: record_type.to_string(),
+    }
+}
+pub fn handle_update(request: CloudflareUpdateRequest) -> Result<UpdateResponse, UpdateError> {
     let client = Client::new();
     let zone = match get_zone(&client, &request.record_name, &request.api_token) {
         Ok(Some(zone)) => zone,
@@ -201,8 +255,43 @@ pub fn handle_update(request: CloudflareUpdateRequest) -> Result<(), UpdateError
             ))));
         }
     };
-    // TODO: remove
-    info!("Zone: [{:#?}]", zone);
-    info!("Record: [{:#?}]", record);
-    Ok(())
+    let ipv4_result = match update_record(
+        &client,
+        &request.api_token,
+        &zone.id,
+        &record.id,
+        &request.ipv4addr,
+        &request.record_name,
+    ) {
+        Ok(result) => result,
+        Err(_e) => {
+            return Err(UpdateError::Retryable(String::from(
+                "Could not update ipv4 address",
+            )));
+        }
+    };
+    if let Some(ip) = request.ipv6addr {
+        let ipv6_result = match update_record(
+            &client,
+            &request.api_token,
+            &zone.id,
+            &record.id,
+            &ip,
+            &request.record_name,
+        ) {
+            Ok(result) => Some(result),
+            Err(_e) => {
+                warn!("Could not update ipv6 record, ignoring");
+                None
+            }
+        };
+        return Ok(UpdateResponse {
+            ipv4_update: ipv4_result,
+            ipv6_update: ipv6_result,
+        });
+    }
+    Ok(UpdateResponse {
+        ipv4_update: ipv4_result,
+        ipv6_update: None,
+    })
 }

@@ -42,10 +42,11 @@ fn main() {
             match update_record(UpdateRequest::Cloudflare(CloudflareUpdateRequest {
                 api_token,
                 record_name,
-                ip: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                ipv4addr: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                ipv6addr: None,
                 allow_create: true,
             })) {
-                Ok(()) => info!("ok record"),
+                Ok(_response) => info!("ok record"),
                 Err(error) => error!("error: [{:#?}]", error),
             };
         }
