@@ -1,43 +1,26 @@
+use crate::{RecordUpdate, UpdateError, UpdateResponse, get_sld, translate_error};
 use log::{debug, error, info, trace, warn};
-use reqwest::{Error, blocking::Client};
+use reqwest::{Error, IntoUrl, Method, blocking::Client};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::fmt::Debug;
 use std::net::IpAddr;
-
-use crate::{RecordUpdate, UpdateError, UpdateResponse, get_sld};
+use std::time::SystemTime;
 
 pub struct CloudflareUpdateRequest {
     pub api_token: String,
     pub record_name: String,
-    pub ipv4addr: IpAddr,
+    pub ipv4addr: Option<IpAddr>,
     pub ipv6addr: Option<IpAddr>,
     pub allow_create: bool,
 }
-
-#[derive(Deserialize, Debug)]
-struct GetRecordsResponse {
-    pub errors: Vec<ResponseInfo>,
-    pub messages: Vec<ResponseInfo>,
-    pub success: bool,
-    pub result: Option<Vec<RecordResponse>>,
-    pub result_info: Option<ResultInfo>,
-}
-
 #[derive(Deserialize, Debug)]
 struct RecordResponse {
     pub id: String,
     pub created_on: String,
     pub modified_on: String,
 }
-
-#[derive(Deserialize, Debug)]
-struct GetZonesResponse {
-    pub errors: Vec<ResponseInfo>,
-    pub messages: Vec<ResponseInfo>,
-    pub success: bool,
-    pub result: Option<Vec<Zone>>,
-    pub result_info: Option<ResultInfo>,
-}
-
 #[derive(Deserialize, Debug, Clone)]
 struct Zone {
     pub id: String,
@@ -49,23 +32,6 @@ struct Zone {
 struct Account {
     pub id: String,
     pub name: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct ResultInfo {
-    pub count: Option<u32>,
-    pub page: Option<u32>,
-    pub per_page: Option<u32>,
-    pub total_count: Option<u32>,
-    pub total_pages: Option<u32>,
-}
-
-#[derive(Deserialize, Debug)]
-struct ResponseInfo {
-    pub code: u32,
-    pub message: String,
-    pub documentation_url: Option<String>,
-    pub source: Option<Source>,
 }
 
 #[derive(Serialize, Debug)]
@@ -85,47 +51,119 @@ struct CreateRequest {
     pub proxied: bool,
 }
 
-#[derive(Deserialize, Debug)]
-struct Source {
-    pub pointer: Option<String>,
-}
-
-fn get_zone(client: &Client, record_name: &str, api_token: &str) -> Result<Option<Zone>, Error> {
-    trace!("In get_zone, arguments - record_name: [{:#?}]", record_name);
-    let existing_record_res: GetZonesResponse = client
-        .get("https://api.cloudflare.com/client/v4/zones")
-        .header("Authorization", format!("Bearer {}", api_token))
-        .query(&[("name.contains", get_sld(record_name))])
-        .send()?
-        .json()?;
+fn make_request<
+    T: DeserializeOwned + Debug,
+    U: Serialize + ?Sized + Debug,
+    V: Serialize + ?Sized + Debug,
+    W: IntoUrl + Debug,
+>(
+    client: &Client,
+    method: Method,
+    url: W,
+    api_token: &str,
+    query: Option<&U>,
+    body: Option<&V>,
+) -> Result<Option<T>, UpdateError> {
     debug!(
-        "Received response from GetZones CloudFlare API, res: [{:#?}]",
-        existing_record_res
+        "Making [{:#?}] request to url: [{:#?}], query: [{:#?}], body: [{:#?}]",
+        method, url, query, body
     );
-
-    if !existing_record_res.success {
-        error!(
-            "Received unsuccessful response from GetZones CloudFlare API, errors: [{:#?}]",
-            existing_record_res.errors
-        );
-        return Ok(None);
-    } else if existing_record_res.errors.len() > 0 {
+    let mut request_builder = client
+        .request(method, url)
+        .header("Authorization", format!("Bearer {}", api_token));
+    if let Some(query) = query {
+        request_builder = request_builder.query(query);
+    }
+    if let Some(body) = body {
+        request_builder = request_builder.json(body);
+    }
+    let response: Value = match request_builder.send() {
+        Ok(response) => match response.json() {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(UpdateError::Fatal(format!(
+                    "Failed to parse response, error: [{:#?}]",
+                    e
+                )));
+            }
+        },
+        Err(e) => {
+            return Err(translate_error(e));
+        }
+    };
+    debug!("Response: [{:#?}]", response);
+    if let Some(success) = response.get("success")
+        && !(success.as_bool().unwrap_or(true))
+    {
+        return Err(UpdateError::Fatal(format!(
+            "Received unsuccessful response from CloudFlare API, response: [{:#?}]",
+            response
+        )));
+    }
+    if let Some(errors) = response.get("errors")
+        && errors.as_array().unwrap().len() > 0
+    {
         warn!(
-            "Received errors from GetZones CloudFlare API, errors: [{:#?}]",
-            existing_record_res.errors
+            "Received errors from CloudFlare API, errors: [{:#?}]",
+            errors
         )
     }
-
-    if existing_record_res.messages.len() > 0 {
+    if let Some(messages) = response.get("messages")
+        && messages.as_array().unwrap().len() > 0
+    {
         info!(
-            "Received messages from GetZones CloudFlare API, messages: [{:#?}]",
-            existing_record_res.messages
-        );
+            "Received messages from CloudFlare API, errors: [{:#?}]",
+            messages
+        )
     }
-
-    match existing_record_res.result {
-        Some(zones) => Ok(get_most_specific_zone(&zones, record_name)),
+    match response.get("result") {
+        Some(result) => match serde_json::from_value(result.clone()) {
+            Ok(result) => Ok(Some(result)),
+            Err(e) => Err(UpdateError::Fatal(format!(
+                "Failed to deserialize response: [{:#?}], error: [{:#?}]",
+                response, e
+            ))),
+        },
         None => Ok(None),
+    }
+}
+
+fn get_zone(client: &Client, record_name: &str, api_token: &str) -> Result<Zone, UpdateError> {
+    let zones: Option<Vec<Zone>> = match make_request(
+        client,
+        Method::GET,
+        "https://api.cloudflare.com/client/v4/zones",
+        api_token,
+        Some(&[("name.contains", get_sld(record_name))]),
+        None::<&UpdateRequest>,
+    ) {
+        Ok(zones) => zones,
+        Err(e) => {
+            let message = format!(
+                "Failed to get zone for record name: [{}], error: [{:#?}]",
+                record_name, e
+            );
+            return match e {
+                UpdateError::Fatal(_) => Err(UpdateError::Fatal(message)),
+                UpdateError::Retryable(_) => Err(UpdateError::Retryable(message)),
+            };
+        }
+    };
+    let zones = match zones {
+        Some(zones) => zones,
+        None => {
+            return Err(UpdateError::Fatal(format!(
+                "Could not find zone for record name: [{}]",
+                record_name
+            )));
+        }
+    };
+    match get_most_specific_zone(&zones, record_name) {
+        Some(zone) => Ok(zone),
+        None => Err(UpdateError::Fatal(format!(
+            "Could not find zone for record name: [{}]",
+            record_name
+        ))),
     }
 }
 fn get_most_specific_zone(zones: &[Zone], record_name: &str) -> Option<Zone> {
@@ -142,47 +180,41 @@ fn find_record(
     record_name: &str,
     zone_id: &str,
     api_token: &str,
-) -> Result<Option<RecordResponse>, Error> {
-    trace!(
-        "In find_record, arguments - record_name: [{:#?}], zone_id: [{:#?}]",
-        record_name, zone_id
-    );
-    let existing_record_res: GetRecordsResponse = client
-        .get(format!(
+    record_type: &str,
+) -> Result<Option<RecordResponse>, UpdateError> {
+    let records: Option<Vec<RecordResponse>> = match make_request(
+        client,
+        Method::GET,
+        format!(
             "https://api.cloudflare.com/client/v4/zones/{}/dns_records",
             zone_id
-        ))
-        .header("Authorization", format!("Bearer {}", api_token))
-        .query(&[("name.exact", record_name)])
-        .send()?
-        .json()?;
-    debug!(
-        "Received response from GetDnsRecords CloudFlare API, input zone ID: [{:#?}], res: [{:#?}]",
-        zone_id, existing_record_res
-    );
-
-    if !existing_record_res.success {
-        error!(
-            "Received unsuccessful response from GetDnsRecords CloudFlare API, input zone ID: [{:#?}], errors: [{:#?}]",
-            zone_id, existing_record_res.errors
-        );
-        return Ok(None);
-    } else if existing_record_res.errors.len() > 0 {
-        warn!(
-            "Received errors from GetDnsRecords CloudFlare API, errors: [{:#?}]",
-            existing_record_res.errors
-        )
-    }
-
-    if existing_record_res.messages.len() > 0 {
-        info!(
-            "Received messages from GetZones CloudFlare API, messages: [{:#?}]",
-            existing_record_res.messages
-        );
-    }
-
-    match existing_record_res.result {
-        Some(records) => Ok(records.into_iter().next()),
+        ),
+        api_token,
+        Some(&[("name.exact", record_name), ("type", record_type)]),
+        None::<&UpdateRequest>,
+    ) {
+        Ok(records) => records,
+        Err(e) => {
+            let message = format!(
+                "Failed to find record name: [{}], error: [{:#?}]",
+                record_name, e
+            );
+            return match e {
+                UpdateError::Fatal(_) => Err(UpdateError::Fatal(message)),
+                UpdateError::Retryable(_) => Err(UpdateError::Retryable(message)),
+            };
+        }
+    };
+    match records {
+        Some(records) => {
+            if (records.len() > 1) {
+                warn!(
+                    "Found multiple records for name [{}], updating first record in list [{:#?}]",
+                    record_name, records
+                );
+            }
+            Ok(records.into_iter().next())
+        }
         None => Ok(None),
     }
 }
@@ -193,24 +225,41 @@ fn update_record(
     record_id: &str,
     ip: &IpAddr,
     record_name: &str,
-) -> Result<RecordUpdate, Error> {
-    trace!(
-        "In update_record, arguments - zone_id: [{:#?}], record_id: [{:#?}]",
-        zone_id, record_id
-    );
-    let _update_record_response: GetRecordsResponse = client
-        .patch(format!(
+) -> Result<RecordUpdate, UpdateError> {
+    let record: Option<RecordResponse> = match make_request(
+        client,
+        Method::PATCH,
+        format!(
             "https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}",
             zone_id, record_id
-        ))
-        .header("Authorization", format!("Bearer {}", api_token))
-        .json(&get_body(ip, record_name))
-        .send()?
-        .json()?;
-    Ok(RecordUpdate {
-        ip: ip.clone(),
-        record_name: record_name.to_string(),
-    })
+        ),
+        api_token,
+        None::<&UpdateRequest>,
+        Some(&get_body(ip, record_name)),
+    ) {
+        Ok(record) => record,
+        Err(e) => {
+            let message = format!(
+                "Failed to update record name: [{}], error: [{:#?}]",
+                record_name, e
+            );
+            return match e {
+                UpdateError::Fatal(_) => Err(UpdateError::Fatal(message)),
+                UpdateError::Retryable(_) => Err(UpdateError::Retryable(message)),
+            };
+        }
+    };
+    match record {
+        Some(record) => Ok(RecordUpdate {
+            ip: ip.clone(),
+            record_name: record_name.to_string(),
+            modified_on: record.modified_on.clone(),
+        }),
+        None => Err(UpdateError::Fatal(format!(
+            "Received emtpy response when updating record for zone ID: [{}], record ID: [{}], name: [{}]",
+            zone_id, record_id, record_name
+        ))),
+    }
 }
 fn get_body(ip: &IpAddr, record_name: &str) -> UpdateRequest {
     let record_type = match ip {
@@ -220,78 +269,61 @@ fn get_body(ip: &IpAddr, record_name: &str) -> UpdateRequest {
     UpdateRequest {
         name: record_name.to_string(),
         content: ip.to_string(),
-        comment: String::from("Updated by rusty_ddns client for Cloudflare"),
+        comment: String::from(format!(
+            "Updated by rusty_ddns client for Cloudflare at {}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        )),
         r#type: record_type.to_string(),
+    }
+}
+fn update_or_create(
+    client: &Client,
+    record_name: &str,
+    zone_id: &str,
+    api_token: &str,
+    record_type: &str,
+    ip: &IpAddr,
+) -> Result<RecordUpdate, UpdateError> {
+    match find_record(&client, record_name, zone_id, api_token, record_type)? {
+        Some(record) => update_record(&client, api_token, zone_id, &record.id, &ip, record_name),
+        None => {
+            // TODO: implement creation
+            Err(UpdateError::Fatal(String::from(
+                "Could not find existing ipv4 record",
+            )))
+        }
     }
 }
 pub fn handle_update(request: CloudflareUpdateRequest) -> Result<UpdateResponse, UpdateError> {
     let client = Client::new();
-    let zone = match get_zone(&client, &request.record_name, &request.api_token) {
-        Ok(Some(zone)) => zone,
-        Ok(None) => {
-            return Err(UpdateError::Retryable(String::from(
-                "Could not find existing record",
-            )));
-        }
-        Err(error) => {
-            return Err(UpdateError::Retryable(String::from(format!(
-                "Failed to fetch existing record, error [{:#?}]",
-                error
-            ))));
-        }
-    };
-    let record = match find_record(&client, &request.record_name, &zone.id, &request.api_token) {
-        Ok(Some(record)) => record,
-        // TODO: update this to create a new record
-        Ok(None) => {
-            return Err(UpdateError::Retryable(String::from(
-                "Could not find existing record",
-            )));
-        }
-        Err(error) => {
-            return Err(UpdateError::Retryable(String::from(format!(
-                "Failed to fetch existing record, error [{:#?}]",
-                error
-            ))));
-        }
-    };
-    let ipv4_result = match update_record(
-        &client,
-        &request.api_token,
-        &zone.id,
-        &record.id,
-        &request.ipv4addr,
-        &request.record_name,
-    ) {
-        Ok(result) => result,
-        Err(_e) => {
-            return Err(UpdateError::Retryable(String::from(
-                "Could not update ipv4 address",
-            )));
-        }
-    };
-    if let Some(ip) = request.ipv6addr {
-        let ipv6_result = match update_record(
+    let zone = get_zone(&client, &request.record_name, &request.api_token)?;
+    let ipv4_result = match request.ipv4addr {
+        Some(ip) => Some(update_or_create(
             &client,
-            &request.api_token,
-            &zone.id,
-            &record.id,
-            &ip,
             &request.record_name,
-        ) {
-            Ok(result) => Some(result),
-            Err(_e) => {
-                warn!("Could not update ipv6 record, ignoring");
-                None
-            }
-        };
-        return Ok(UpdateResponse {
-            ipv4_update: ipv4_result,
-            ipv6_update: ipv6_result,
-        });
-    }
+            &zone.id,
+            &request.api_token,
+            "A",
+            &ip,
+        )?),
+        None => None,
+    };
+    let ipv6_result = match request.ipv6addr {
+        Some(ip) => Some(update_or_create(
+            &client,
+            &request.record_name,
+            &zone.id,
+            &request.api_token,
+            "AAAA",
+            &ip,
+        )?),
+        None => None,
+    };
     Ok(UpdateResponse {
         ipv4_update: ipv4_result,
-        ipv6_update: None,
+        ipv6_update: ipv6_result,
     })
 }

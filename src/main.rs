@@ -1,9 +1,9 @@
-use std::net::{IpAddr, Ipv4Addr};
-
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{Verbosity, WarnLevel};
 use log::{error, info};
 use rusty_ddns::{UpdateRequest, cloudflare::CloudflareUpdateRequest, update_record};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 
 /// DDNS client program
 #[derive(Parser, Debug)]
@@ -42,8 +42,12 @@ fn main() {
             match update_record(UpdateRequest::Cloudflare(CloudflareUpdateRequest {
                 api_token,
                 record_name,
-                ipv4addr: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-                ipv6addr: None,
+                ipv4addr: Some(IpAddr::V4(
+                    Ipv4Addr::from_str("24.18.226.122").expect("test"),
+                )),
+                ipv6addr: Some(IpAddr::V6(
+                    Ipv6Addr::from_str("2601:602:9601:a690:8ba4:4bdf:ebc1:3d35").expect("test"),
+                )),
                 allow_create: true,
             })) {
                 Ok(_response) => info!("ok record"),
