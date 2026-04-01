@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use clap_verbosity_flag::{Verbosity, WarnLevel};
 use log::{error, info};
-use rusty_ddns::{UpdateRequest, cloudflare::CloudflareUpdateRequest, update_record};
+use rusty_ddns::update::{UpdateRequest, update_record};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
@@ -25,6 +25,8 @@ enum Commands {
         api_token: String,
         #[arg(short, long)]
         record_name: String,
+        #[arg(long)]
+        allow_create: bool,
     },
 }
 
@@ -34,24 +36,30 @@ fn main() {
         .filter_level(cli.verbosity.log_level_filter())
         .init();
 
+    // TODO: parse IP address from system or remote call
+
     match cli.command {
         Commands::Cloudflare {
             api_token,
             record_name,
+            allow_create,
         } => {
-            match update_record(UpdateRequest::Cloudflare(CloudflareUpdateRequest {
+            match update_record(UpdateRequest::cloudflare(
                 api_token,
                 record_name,
-                ipv4addr: Some(IpAddr::V4(
+                Some(IpAddr::V4(
                     Ipv4Addr::from_str("24.18.226.122").expect("test"),
                 )),
-                ipv6addr: Some(IpAddr::V6(
+                Some(IpAddr::V6(
                     Ipv6Addr::from_str("2601:602:9601:a690:8ba4:4bdf:ebc1:3d35").expect("test"),
                 )),
-                allow_create: true,
-            })) {
-                Ok(_response) => info!("ok record"),
-                Err(error) => error!("error: [{:#?}]", error),
+                allow_create,
+            )) {
+                Ok(response) => info!("Successfully updated Cloudflare records: [{:#?}]", response),
+                Err(error) => error!(
+                    "Unexpected error occurred while attempting to update Cloudflare records: [{:#?}]",
+                    error
+                ),
             };
         }
     }

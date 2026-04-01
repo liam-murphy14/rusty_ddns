@@ -1,4 +1,4 @@
-use crate::{RecordUpdate, UpdateError, UpdateResponse, get_sld, translate_error};
+use crate::update::{RecordUpdate, UpdateError, UpdateResponse, get_sld, translate_error};
 use log::{debug, info, warn};
 use reqwest::{IntoUrl, Method, blocking::Client};
 use serde::de::DeserializeOwned;
@@ -9,46 +9,63 @@ use std::net::IpAddr;
 use std::time::SystemTime;
 
 pub struct CloudflareUpdateRequest {
-    pub api_token: String,
-    pub record_name: String,
-    pub ipv4addr: Option<IpAddr>,
-    pub ipv6addr: Option<IpAddr>,
-    pub allow_create: bool,
+    api_token: String,
+    record_name: String,
+    ipv4addr: Option<IpAddr>,
+    ipv6addr: Option<IpAddr>,
+    allow_create: bool,
+}
+impl CloudflareUpdateRequest {
+    pub fn new(
+        api_token: String,
+        record_name: String,
+        ipv4addr: Option<IpAddr>,
+        ipv6addr: Option<IpAddr>,
+        allow_create: bool,
+    ) -> Self {
+        CloudflareUpdateRequest {
+            api_token,
+            record_name,
+            ipv4addr,
+            ipv6addr,
+            allow_create,
+        }
+    }
 }
 #[derive(Deserialize, Debug)]
 struct RecordResponse {
-    pub id: String,
-    pub created_on: String,
-    pub modified_on: String,
+    id: String,
+    created_on: String,
+    modified_on: String,
 }
 #[derive(Deserialize, Debug, Clone)]
 struct Zone {
-    pub id: String,
-    pub name: String,
-    pub account: Account,
+    id: String,
+    name: String,
+    account: Account,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 struct Account {
-    pub id: String,
-    pub name: String,
+    id: String,
+    name: String,
 }
 
 #[derive(Serialize, Debug)]
 struct UpdateRequest {
-    pub name: String,
-    pub content: String,
-    pub comment: String,
-    pub r#type: String,
+    name: String,
+    content: String,
+    comment: String,
+    r#type: String,
 }
 
 #[derive(Serialize, Debug)]
 struct CreateRequest {
-    pub name: String,
-    pub content: String,
-    pub comment: String,
-    pub r#type: String,
-    pub proxied: bool,
+    name: String,
+    content: String,
+    comment: String,
+    r#type: String,
+    proxied: bool,
 }
 
 fn make_request<
@@ -207,7 +224,7 @@ fn find_record(
     };
     match records {
         Some(records) => {
-            if records.len() > 1  {
+            if records.len() > 1 {
                 warn!(
                     "Found multiple records for name [{}], updating first record in list [{:#?}]",
                     record_name, records
