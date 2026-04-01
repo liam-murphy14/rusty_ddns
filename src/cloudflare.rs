@@ -1,6 +1,6 @@
 use crate::{RecordUpdate, UpdateError, UpdateResponse, get_sld, translate_error};
-use log::{debug, error, info, trace, warn};
-use reqwest::{Error, IntoUrl, Method, blocking::Client};
+use log::{debug, info, warn};
+use reqwest::{IntoUrl, Method, blocking::Client};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -207,7 +207,7 @@ fn find_record(
     };
     match records {
         Some(records) => {
-            if (records.len() > 1) {
+            if records.len() > 1  {
                 warn!(
                     "Found multiple records for name [{}], updating first record in list [{:#?}]",
                     record_name, records
@@ -216,6 +216,48 @@ fn find_record(
             Ok(records.into_iter().next())
         }
         None => Ok(None),
+    }
+}
+fn create_record(
+    client: &Client,
+    api_token: &str,
+    zone_id: &str,
+    ip: &IpAddr,
+    record_name: &str,
+) -> Result<RecordUpdate, UpdateError> {
+    let record: Option<RecordResponse> = match make_request(
+        client,
+        Method::POST,
+        format!(
+            "https://api.cloudflare.com/client/v4/zones/{}/dns_records",
+            zone_id
+        ),
+        api_token,
+        None::<&UpdateRequest>,
+        Some(&get_create_body(ip, record_name)),
+    ) {
+        Ok(record) => record,
+        Err(e) => {
+            let message = format!(
+                "Failed to create record name: [{}], error: [{:#?}]",
+                record_name, e
+            );
+            return match e {
+                UpdateError::Fatal(_) => Err(UpdateError::Fatal(message)),
+                UpdateError::Retryable(_) => Err(UpdateError::Retryable(message)),
+            };
+        }
+    };
+    match record {
+        Some(record) => Ok(RecordUpdate {
+            ip: ip.clone(),
+            record_name: record_name.to_string(),
+            modified_on: record.modified_on.clone(),
+        }),
+        None => Err(UpdateError::Fatal(format!(
+            "Received emtpy response when creating record for zone ID: [{}], name: [{}]",
+            zone_id, record_name
+        ))),
     }
 }
 fn update_record(
@@ -279,6 +321,25 @@ fn get_body(ip: &IpAddr, record_name: &str) -> UpdateRequest {
         r#type: record_type.to_string(),
     }
 }
+fn get_create_body(ip: &IpAddr, record_name: &str) -> CreateRequest {
+    let record_type = match ip {
+        IpAddr::V4(_) => "A",
+        IpAddr::V6(_) => "AAAA",
+    };
+    CreateRequest {
+        name: record_name.to_string(),
+        content: ip.to_string(),
+        comment: String::from(format!(
+            "Updated by rusty_ddns client for Cloudflare at {}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        )),
+        r#type: record_type.to_string(),
+        proxied: false,
+    }
+}
 fn update_or_create(
     client: &Client,
     record_name: &str,
@@ -286,15 +347,23 @@ fn update_or_create(
     api_token: &str,
     record_type: &str,
     ip: &IpAddr,
+    allow_create: bool,
 ) -> Result<RecordUpdate, UpdateError> {
     match find_record(&client, record_name, zone_id, api_token, record_type)? {
         Some(record) => update_record(&client, api_token, zone_id, &record.id, &ip, record_name),
-        None => {
-            // TODO: implement creation
-            Err(UpdateError::Fatal(String::from(
-                "Could not find existing ipv4 record",
-            )))
-        }
+        None => match allow_create {
+            true => {
+                info!(
+                    "Could not find existing {} record for name {}, creating new record",
+                    record_name, record_name
+                );
+                create_record(&client, api_token, zone_id, ip, record_name)
+            }
+            false => Err(UpdateError::Fatal(String::from(format!(
+                "Could not find existing {} record for name {}, and record creation is disabled",
+                record_type, record_name
+            )))),
+        },
     }
 }
 pub fn handle_update(request: CloudflareUpdateRequest) -> Result<UpdateResponse, UpdateError> {
@@ -308,6 +377,7 @@ pub fn handle_update(request: CloudflareUpdateRequest) -> Result<UpdateResponse,
             &request.api_token,
             "A",
             &ip,
+            request.allow_create,
         )?),
         None => None,
     };
@@ -319,6 +389,7 @@ pub fn handle_update(request: CloudflareUpdateRequest) -> Result<UpdateResponse,
             &request.api_token,
             "AAAA",
             &ip,
+            request.allow_create,
         )?),
         None => None,
     };
