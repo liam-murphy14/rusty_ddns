@@ -1,4 +1,7 @@
-use log::{debug, info};
+use log::{debug, info, warn};
+use nix::ifaddrs::InterfaceAddress;
+use nix::net::if_::InterfaceFlags;
+use nix::sys::socket::AddressFamily;
 use reqwest::blocking::Client;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -35,9 +38,52 @@ pub fn get_ipv6() -> Option<IpAddr> {
     get_ipv6_web()
 }
 
+// TODO: find a better way to calculate these
+const MAIN_INTERFACE_NAMES: &[&str] = &["eth0", "wlan0", "en0", "eno0", "wlo0"];
+
+#[cfg(unix)]
+fn get_eligible_addresses(address_family: AddressFamily) -> Vec<InterfaceAddress> {
+    use nix::sys::socket::{SockaddrLike, SockaddrStorage};
+    match nix::ifaddrs::getifaddrs() {
+        Ok(ifaddrs) => ifaddrs
+            .filter(|addr| {
+                let family = addr.address.as_ref().and_then(SockaddrStorage::family);
+
+                MAIN_INTERFACE_NAMES.contains(&addr.interface_name.as_str())
+                    && addr.flags.contains(InterfaceFlags::IFF_RUNNING)
+                    && addr.address.is_some()
+                    && family.is_some()
+                    && family.unwrap().eq(&address_family)
+            })
+            .collect::<Vec<InterfaceAddress>>(),
+        Err(e) => {
+            warn!("Error while fetching network interfaces: [{:#?}]", e);
+            vec![]
+        }
+    }
+}
+
 #[cfg(unix)]
 pub fn get_ipv4_system() -> Option<IpAddr> {
-    None
+    let eligible = get_eligible_addresses(AddressFamily::Inet);
+    let addresses = eligible
+        .iter()
+        .filter_map(|addr| addr.address.and_then(|a| Some(a.as_sockaddr_in()?.ip())))
+        .filter(|ip| {
+            debug!("Found potential ipv4 address [{:?}]", ip);
+            !ip.is_loopback() && !ip.is_private() && !ip.is_link_local() && !ip.is_unspecified()
+        })
+        .collect::<Vec<Ipv4Addr>>();
+
+    if !addresses.is_empty() {
+        info!(
+            "Found ipv4 eligible addresses from system: [{:#?}], using address [{:#?}]",
+            addresses,
+            addresses.first()
+        );
+    }
+
+    addresses.first().copied().map(IpAddr::V4)
 }
 
 #[cfg(windows)]
@@ -47,9 +93,30 @@ pub fn get_ipv4_system() -> Option<IpAddr> {
 
 #[cfg(unix)]
 pub fn get_ipv6_system() -> Option<IpAddr> {
-    None
-}
+    let eligible = get_eligible_addresses(AddressFamily::Inet6);
+    let addresses = eligible
+        .iter()
+        .filter_map(|addr| addr.address.and_then(|a| Some(a.as_sockaddr_in6()?.ip())))
+        .filter(|ip| {
+            debug!("Found potential ipv6 address [{:?}]", ip);
+            !ip.is_loopback()
+                && !ip.is_unique_local()
+                && !ip.is_unicast_link_local()
+                && !ip.is_unspecified()
+        })
+        .collect::<Vec<Ipv6Addr>>();
 
+    if !addresses.is_empty() {
+        // TODO: ideally would like to get the SLAAC address, specifically, or if not present, then the DHCPv6 address, but seems nix crate does not yet support these flags
+        info!(
+            "Found ipv6 eligible addresses from system: [{:#?}], using address [{:#?}]",
+            addresses,
+            addresses.first()
+        );
+    }
+
+    addresses.first().copied().map(IpAddr::V6)
+}
 #[cfg(windows)]
 pub fn get_ipv6_system() -> Option<IpAddr> {
     None
