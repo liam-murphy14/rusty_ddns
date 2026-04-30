@@ -104,6 +104,7 @@ pub fn get_ipv4_system() -> Option<IpAddr> {
     addresses.first().copied().map(IpAddr::V4)
 }
 
+// TODO: windows implementation
 #[cfg(windows)]
 pub fn get_ipv4_system() -> Option<IpAddr> {
     None
@@ -150,6 +151,8 @@ pub fn get_ipv6_system() -> Option<IpAddr> {
 
     addresses.first().copied().map(IpAddr::V6)
 }
+
+// TODO: windows implementation
 #[cfg(windows)]
 pub fn get_ipv6_system() -> Option<IpAddr> {
     None
