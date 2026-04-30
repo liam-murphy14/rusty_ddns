@@ -68,10 +68,28 @@ pub fn get_ipv4_system() -> Option<IpAddr> {
     let eligible = get_eligible_addresses(AddressFamily::Inet);
     let addresses = eligible
         .iter()
-        .filter_map(|addr| addr.address.and_then(|a| Some(a.as_sockaddr_in()?.ip())))
-        .filter(|ip| {
-            debug!("Found potential ipv4 address [{:?}]", ip);
-            !ip.is_loopback() && !ip.is_private() && !ip.is_link_local() && !ip.is_unspecified()
+        .filter_map(
+            |addr| match addr.address.and_then(|a| Some(a.as_sockaddr_in()?.ip())) {
+                Some(a) => Some((addr, a)),
+                None => None,
+            },
+        )
+        .filter_map(|(addr, ip)| {
+            debug!(
+                "Found potential ipv4 address [{:?}] on interface [{}] with flags [{:x}<{}>]",
+                ip,
+                addr.interface_name,
+                addr.flags.bits(),
+                addr.flags
+            );
+            match !ip.is_loopback()
+                && !ip.is_private()
+                && !ip.is_link_local()
+                && !ip.is_unspecified()
+            {
+                true => Some(ip),
+                false => None,
+            }
         })
         .collect::<Vec<Ipv4Addr>>();
 
@@ -96,13 +114,28 @@ pub fn get_ipv6_system() -> Option<IpAddr> {
     let eligible = get_eligible_addresses(AddressFamily::Inet6);
     let addresses = eligible
         .iter()
-        .filter_map(|addr| addr.address.and_then(|a| Some(a.as_sockaddr_in6()?.ip())))
-        .filter(|ip| {
-            debug!("Found potential ipv6 address [{:?}]", ip);
-            !ip.is_loopback()
+        .filter_map(
+            |addr| match addr.address.and_then(|a| Some(a.as_sockaddr_in6()?.ip())) {
+                Some(a) => Some((addr, a)),
+                None => None,
+            },
+        )
+        .filter_map(|(addr, ip)| {
+            debug!(
+                "Found potential ipv6 address [{:?}] on interface [{}] with flags [{:x}<{}>]",
+                ip,
+                addr.interface_name,
+                addr.flags.bits(),
+                addr.flags
+            );
+            match !ip.is_loopback()
                 && !ip.is_unique_local()
                 && !ip.is_unicast_link_local()
                 && !ip.is_unspecified()
+            {
+                true => Some(ip),
+                false => None,
+            }
         })
         .collect::<Vec<Ipv6Addr>>();
 
