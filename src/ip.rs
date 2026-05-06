@@ -41,6 +41,25 @@ pub fn get_ipv6() -> Option<IpAddr> {
 // TODO: find a better way to calculate these
 const MAIN_INTERFACE_NAMES: &[&str] = &["eth0", "wlan0", "en0", "eno0", "wlo0"];
 
+fn is_eligible_ipv4(ip: Ipv4Addr) -> bool {
+    !ip.is_loopback() && !ip.is_private() && !ip.is_link_local() && !ip.is_unspecified()
+}
+
+fn is_eligible_ipv6(ip: Ipv6Addr) -> bool {
+    !ip.is_loopback()
+        && !ip.is_unique_local()
+        && !ip.is_unicast_link_local()
+        && !ip.is_unspecified()
+}
+
+fn parse_ipv4_web_response(text_ip_address: &str) -> Option<IpAddr> {
+    Some(IpAddr::V4(Ipv4Addr::from_str(text_ip_address).ok()?))
+}
+
+fn parse_ipv6_web_response(text_ip_address: &str) -> Option<IpAddr> {
+    Some(IpAddr::V6(Ipv6Addr::from_str(text_ip_address).ok()?))
+}
+
 #[cfg(unix)]
 fn get_eligible_addresses(address_family: AddressFamily) -> Vec<InterfaceAddress> {
     use nix::sys::socket::{SockaddrLike, SockaddrStorage};
@@ -68,12 +87,11 @@ pub fn get_ipv4_system() -> Option<IpAddr> {
     let eligible = get_eligible_addresses(AddressFamily::Inet);
     let addresses = eligible
         .iter()
-        .filter_map(
-            |addr| match addr.address.and_then(|a| Some(a.as_sockaddr_in()?.ip())) {
-                Some(a) => Some((addr, a)),
-                None => None,
-            },
-        )
+        .filter_map(|addr| {
+            addr.address
+                .and_then(|a| Some(a.as_sockaddr_in()?.ip()))
+                .map(|ip| (addr, ip))
+        })
         .filter_map(|(addr, ip)| {
             debug!(
                 "Found potential ipv4 address [{:?}] on interface [{}] with flags [{:x}<{}>]",
@@ -82,11 +100,7 @@ pub fn get_ipv4_system() -> Option<IpAddr> {
                 addr.flags.bits(),
                 addr.flags
             );
-            match !ip.is_loopback()
-                && !ip.is_private()
-                && !ip.is_link_local()
-                && !ip.is_unspecified()
-            {
+            match is_eligible_ipv4(ip) {
                 true => Some(ip),
                 false => None,
             }
@@ -115,12 +129,11 @@ pub fn get_ipv6_system() -> Option<IpAddr> {
     let eligible = get_eligible_addresses(AddressFamily::Inet6);
     let addresses = eligible
         .iter()
-        .filter_map(
-            |addr| match addr.address.and_then(|a| Some(a.as_sockaddr_in6()?.ip())) {
-                Some(a) => Some((addr, a)),
-                None => None,
-            },
-        )
+        .filter_map(|addr| {
+            addr.address
+                .and_then(|a| Some(a.as_sockaddr_in6()?.ip()))
+                .map(|ip| (addr, ip))
+        })
         .filter_map(|(addr, ip)| {
             debug!(
                 "Found potential ipv6 address [{:?}] on interface [{}] with flags [{:x}<{}>]",
@@ -129,11 +142,7 @@ pub fn get_ipv6_system() -> Option<IpAddr> {
                 addr.flags.bits(),
                 addr.flags
             );
-            match !ip.is_loopback()
-                && !ip.is_unique_local()
-                && !ip.is_unicast_link_local()
-                && !ip.is_unspecified()
-            {
+            match is_eligible_ipv6(ip) {
                 true => Some(ip),
                 false => None,
             }
@@ -170,7 +179,7 @@ pub fn get_ipv6_web() -> Option<IpAddr> {
         .text()
         .ok()?;
     debug!("IPv6 address from web is {}", text_ip_address);
-    Some(IpAddr::V6(Ipv6Addr::from_str(&text_ip_address).ok()?))
+    parse_ipv6_web_response(&text_ip_address)
 }
 
 pub fn get_ipv4_web() -> Option<IpAddr> {
@@ -185,5 +194,64 @@ pub fn get_ipv4_web() -> Option<IpAddr> {
         .text()
         .ok()?;
     debug!("IPv4 address from web is {}", text_ip_address);
-    Some(IpAddr::V4(Ipv4Addr::from_str(&text_ip_address).ok()?))
+    parse_ipv4_web_response(&text_ip_address)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_valid_ipv4_web_response() {
+        assert_eq!(
+            parse_ipv4_web_response("203.0.113.10"),
+            Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_ipv4_web_response() {
+        assert_eq!(parse_ipv4_web_response("not an ip"), None);
+        assert_eq!(parse_ipv4_web_response("2001:db8::1"), None);
+    }
+
+    #[test]
+    fn parses_valid_ipv6_web_response() {
+        assert_eq!(
+            parse_ipv6_web_response("2001:db8::1"),
+            Some(IpAddr::V6(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1)))
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_ipv6_web_response() {
+        assert_eq!(parse_ipv6_web_response("not an ip"), None);
+        assert_eq!(parse_ipv6_web_response("203.0.113.10"), None);
+    }
+
+    #[test]
+    fn identifies_eligible_ipv4_addresses() {
+        assert!(is_eligible_ipv4(Ipv4Addr::new(8, 8, 8, 8)));
+        assert!(!is_eligible_ipv4(Ipv4Addr::new(127, 0, 0, 1)));
+        assert!(!is_eligible_ipv4(Ipv4Addr::new(10, 0, 0, 1)));
+        assert!(!is_eligible_ipv4(Ipv4Addr::new(172, 16, 0, 1)));
+        assert!(!is_eligible_ipv4(Ipv4Addr::new(192, 168, 0, 1)));
+        assert!(!is_eligible_ipv4(Ipv4Addr::new(169, 254, 1, 1)));
+        assert!(!is_eligible_ipv4(Ipv4Addr::new(0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn identifies_eligible_ipv6_addresses() {
+        assert!(is_eligible_ipv6(Ipv6Addr::new(
+            0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888
+        )));
+        assert!(!is_eligible_ipv6(Ipv6Addr::LOCALHOST));
+        assert!(!is_eligible_ipv6(Ipv6Addr::new(
+            0xfc00, 0, 0, 0, 0, 0, 0, 1
+        )));
+        assert!(!is_eligible_ipv6(Ipv6Addr::new(
+            0xfe80, 0, 0, 0, 0, 0, 0, 1
+        )));
+        assert!(!is_eligible_ipv6(Ipv6Addr::UNSPECIFIED));
+    }
 }

@@ -82,3 +82,146 @@ fn main() {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_cloudflare(args: &[&str]) -> Cli {
+        let mut argv = vec!["rusty_ddns"];
+        argv.extend_from_slice(args);
+        Cli::try_parse_from(argv).expect("CLI arguments should parse")
+    }
+
+    fn assert_cloudflare_command(cli: Cli, expected_allow_create: bool) {
+        match cli.command {
+            Commands::Cloudflare {
+                api_token,
+                record_name,
+                allow_create,
+            } => {
+                assert_eq!(api_token, "token");
+                assert_eq!(record_name, "host.example.com");
+                assert_eq!(allow_create, expected_allow_create);
+            }
+        }
+    }
+
+    #[test]
+    fn parses_ipv4_only_flag() {
+        let cli = parse_cloudflare(&[
+            "--4",
+            "cloudflare",
+            "--api-token",
+            "token",
+            "--record-name",
+            "host.example.com",
+        ]);
+
+        assert!(cli.only_four);
+        assert!(!cli.only_six);
+        assert_cloudflare_command(cli, false);
+    }
+
+    #[test]
+    fn parses_ipv6_only_flag() {
+        let cli = parse_cloudflare(&[
+            "--6",
+            "cloudflare",
+            "--api-token",
+            "token",
+            "--record-name",
+            "host.example.com",
+        ]);
+
+        assert!(!cli.only_four);
+        assert!(cli.only_six);
+        assert_cloudflare_command(cli, false);
+    }
+
+    #[test]
+    fn defaults_to_both_ip_families_when_no_family_flag_is_set() {
+        let cli = parse_cloudflare(&[
+            "cloudflare",
+            "--api-token",
+            "token",
+            "--record-name",
+            "host.example.com",
+        ]);
+
+        assert!(!cli.only_four);
+        assert!(!cli.only_six);
+        assert_cloudflare_command(cli, false);
+    }
+
+    #[test]
+    fn accepts_both_ip_family_flags() {
+        let cli = parse_cloudflare(&[
+            "--4",
+            "--6",
+            "cloudflare",
+            "--api-token",
+            "token",
+            "--record-name",
+            "host.example.com",
+        ]);
+
+        assert!(cli.only_four);
+        assert!(cli.only_six);
+        assert_cloudflare_command(cli, false);
+    }
+
+    #[test]
+    fn parses_cloudflare_required_arguments() {
+        let cli = parse_cloudflare(&[
+            "cloudflare",
+            "--api-token",
+            "token",
+            "--record-name",
+            "host.example.com",
+        ]);
+
+        assert_cloudflare_command(cli, false);
+    }
+
+    #[test]
+    fn parses_allow_create_flag() {
+        let cli = parse_cloudflare(&[
+            "cloudflare",
+            "--api-token",
+            "token",
+            "--record-name",
+            "host.example.com",
+            "--allow-create",
+        ]);
+
+        assert_cloudflare_command(cli, true);
+    }
+
+    #[test]
+    fn rejects_cloudflare_without_api_token() {
+        let error = Cli::try_parse_from([
+            "rusty_ddns",
+            "cloudflare",
+            "--record-name",
+            "host.example.com",
+        ])
+        .expect_err("missing API token should be rejected");
+
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
+    fn rejects_cloudflare_without_record_name() {
+        let error = Cli::try_parse_from(["rusty_ddns", "cloudflare", "--api-token", "token"])
+            .expect_err("missing record name should be rejected");
+
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+}

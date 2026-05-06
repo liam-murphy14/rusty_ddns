@@ -60,3 +60,35 @@ pub fn get_sld(valid_record_name: &str) -> String {
     let names = valid_record_name.split('.').collect::<Vec<_>>();
     names[names.len() - 2..].join(".")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn get_sld_returns_domain_for_root_record() {
+        assert_eq!(get_sld("example.com"), "example.com");
+    }
+
+    #[test]
+    fn get_sld_strips_subdomains() {
+        assert_eq!(get_sld("host.internal.example.com"), "example.com");
+    }
+
+    #[test]
+    fn cloudflare_constructor_wraps_cloudflare_request() {
+        let ipv4addr = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
+        let ipv6addr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+
+        let request = UpdateRequest::cloudflare(
+            "token".to_string(),
+            "host.example.com".to_string(),
+            Some(ipv4addr),
+            Some(ipv6addr),
+            true,
+        );
+
+        assert!(matches!(request, UpdateRequest::Cloudflare(_)));
+    }
+}

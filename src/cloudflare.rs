@@ -35,18 +35,10 @@ impl CloudflareUpdateRequest {
 #[derive(Deserialize, Debug)]
 struct RecordResponse {
     id: String,
-    created_on: String,
     modified_on: String,
 }
 #[derive(Deserialize, Debug, Clone)]
 struct Zone {
-    id: String,
-    name: String,
-    account: Account,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-struct Account {
     id: String,
     name: String,
 }
@@ -118,7 +110,7 @@ fn make_request<
         )));
     }
     if let Some(errors) = response.get("errors")
-        && errors.as_array().unwrap().len() > 0
+        && !errors.as_array().unwrap().is_empty()
     {
         warn!(
             "Received errors from CloudFlare API, errors: [{:#?}]",
@@ -126,7 +118,7 @@ fn make_request<
         )
     }
     if let Some(messages) = response.get("messages")
-        && messages.as_array().unwrap().len() > 0
+        && !messages.as_array().unwrap().is_empty()
     {
         info!(
             "Received messages from CloudFlare API, errors: [{:#?}]",
@@ -184,7 +176,7 @@ fn get_zone(client: &Client, record_name: &str, api_token: &str) -> Result<Zone,
     }
 }
 fn get_most_specific_zone(zones: &[Zone], record_name: &str) -> Option<Zone> {
-    match zones.into_iter().find(|zone| zone.name == record_name) {
+    match zones.iter().find(|zone| zone.name == record_name) {
         Some(zone) => Some(zone.clone()),
         None => match record_name.find(".") {
             Some(i) => get_most_specific_zone(zones, &record_name[i + 1..]),
@@ -267,7 +259,7 @@ fn create_record(
     };
     match record {
         Some(record) => Ok(RecordUpdate {
-            ip: ip.clone(),
+            ip: *ip,
             record_name: record_name.to_string(),
             modified_on: record.modified_on.clone(),
         }),
@@ -310,7 +302,7 @@ fn update_record(
     };
     match record {
         Some(record) => Ok(RecordUpdate {
-            ip: ip.clone(),
+            ip: *ip,
             record_name: record_name.to_string(),
             modified_on: record.modified_on.clone(),
         }),
@@ -328,13 +320,13 @@ fn get_body(ip: &IpAddr, record_name: &str) -> UpdateRequest {
     UpdateRequest {
         name: record_name.to_string(),
         content: ip.to_string(),
-        comment: String::from(format!(
+        comment: format!(
             "Updated by rusty_ddns client for Cloudflare at {}",
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_millis()
-        )),
+        ),
         r#type: record_type.to_string(),
     }
 }
@@ -346,13 +338,13 @@ fn get_create_body(ip: &IpAddr, record_name: &str) -> CreateRequest {
     CreateRequest {
         name: record_name.to_string(),
         content: ip.to_string(),
-        comment: String::from(format!(
+        comment: format!(
             "Updated by rusty_ddns client for Cloudflare at {}",
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_millis()
-        )),
+        ),
         r#type: record_type.to_string(),
         proxied: false,
     }
@@ -366,20 +358,20 @@ fn update_or_create(
     ip: &IpAddr,
     allow_create: bool,
 ) -> Result<RecordUpdate, UpdateError> {
-    match find_record(&client, record_name, zone_id, api_token, record_type)? {
-        Some(record) => update_record(&client, api_token, zone_id, &record.id, &ip, record_name),
+    match find_record(client, record_name, zone_id, api_token, record_type)? {
+        Some(record) => update_record(client, api_token, zone_id, &record.id, ip, record_name),
         None => match allow_create {
             true => {
                 info!(
                     "Could not find existing {} record for name {}, creating new record",
                     record_name, record_name
                 );
-                create_record(&client, api_token, zone_id, ip, record_name)
+                create_record(client, api_token, zone_id, ip, record_name)
             }
-            false => Err(UpdateError::Fatal(String::from(format!(
+            false => Err(UpdateError::Fatal(format!(
                 "Could not find existing {} record for name {}, and record creation is disabled",
                 record_type, record_name
-            )))),
+            ))),
         },
     }
 }
@@ -414,4 +406,105 @@ pub fn handle_update(request: CloudflareUpdateRequest) -> Result<UpdateResponse,
         ipv4_update: ipv4_result,
         ipv6_update: ipv6_result,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zone(name: &str) -> Zone {
+        Zone {
+            id: format!("zone-{name}"),
+            name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn selects_most_specific_zone_for_nested_record() {
+        let zones = vec![zone("example.com"), zone("sub.example.com")];
+
+        let selected = get_most_specific_zone(&zones, "host.sub.example.com").unwrap();
+
+        assert_eq!(selected.id, "zone-sub.example.com");
+        assert_eq!(selected.name, "sub.example.com");
+    }
+
+    #[test]
+    fn selects_exact_zone_before_parent_zone() {
+        let zones = vec![zone("example.com"), zone("host.example.com")];
+
+        let selected = get_most_specific_zone(&zones, "host.example.com").unwrap();
+
+        assert_eq!(selected.id, "zone-host.example.com");
+        assert_eq!(selected.name, "host.example.com");
+    }
+
+    #[test]
+    fn returns_none_when_no_zone_matches_record_name() {
+        let zones = vec![zone("example.net"), zone("sub.example.net")];
+
+        assert!(get_most_specific_zone(&zones, "host.example.com").is_none());
+    }
+
+    #[test]
+    fn builds_ipv4_update_request_body() {
+        let ip: IpAddr = "203.0.113.10".parse().unwrap();
+
+        let body = get_body(&ip, "host.example.com");
+
+        assert_eq!(body.name, "host.example.com");
+        assert_eq!(body.content, "203.0.113.10");
+        assert_eq!(body.r#type, "A");
+        assert!(
+            body.comment
+                .starts_with("Updated by rusty_ddns client for Cloudflare at ")
+        );
+    }
+
+    #[test]
+    fn builds_ipv6_update_request_body() {
+        let ip: IpAddr = "2001:db8::10".parse().unwrap();
+
+        let body = get_body(&ip, "host.example.com");
+
+        assert_eq!(body.name, "host.example.com");
+        assert_eq!(body.content, "2001:db8::10");
+        assert_eq!(body.r#type, "AAAA");
+        assert!(
+            body.comment
+                .starts_with("Updated by rusty_ddns client for Cloudflare at ")
+        );
+    }
+
+    #[test]
+    fn builds_ipv4_create_request_body_with_proxied_disabled() {
+        let ip: IpAddr = "203.0.113.10".parse().unwrap();
+
+        let body = get_create_body(&ip, "host.example.com");
+
+        assert_eq!(body.name, "host.example.com");
+        assert_eq!(body.content, "203.0.113.10");
+        assert_eq!(body.r#type, "A");
+        assert!(!body.proxied);
+        assert!(
+            body.comment
+                .starts_with("Updated by rusty_ddns client for Cloudflare at ")
+        );
+    }
+
+    #[test]
+    fn builds_ipv6_create_request_body_with_proxied_disabled() {
+        let ip: IpAddr = "2001:db8::10".parse().unwrap();
+
+        let body = get_create_body(&ip, "host.example.com");
+
+        assert_eq!(body.name, "host.example.com");
+        assert_eq!(body.content, "2001:db8::10");
+        assert_eq!(body.r#type, "AAAA");
+        assert!(!body.proxied);
+        assert!(
+            body.comment
+                .starts_with("Updated by rusty_ddns client for Cloudflare at ")
+        );
+    }
 }
