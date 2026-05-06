@@ -1,0 +1,11 @@
+[Unit]
+Description=Run rusty_ddns Cloudflare update every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=rusty_ddns-cloudflare.service
+
+[Install]
+WantedBy=timers.target

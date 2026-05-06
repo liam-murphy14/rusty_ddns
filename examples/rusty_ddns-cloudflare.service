@@ -1,0 +1,12 @@
+[Unit]
+Description=Update Cloudflare DNS records with rusty_ddns
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Install rusty_ddns at this path, or adjust ExecStart to match your package.
+# Replace these placeholders locally. Do not commit real API tokens.
+Environment="CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token"
+Environment="RUSTY_DDNS_RECORD_NAME=host.example.com"
+ExecStart=/usr/local/bin/rusty_ddns cloudflare --api-token ${CLOUDFLARE_API_TOKEN} --record-name ${RUSTY_DDNS_RECORD_NAME}
